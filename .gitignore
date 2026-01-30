@@ -1,0 +1,30 @@
+# Environment files
+.env
+.env.local
+*.env
+
+# Firebase config files (contain secrets)
+google-services.json
+GoogleService-Info.plist
+*-firebase-adminsdk-*.json
+
+# Dependencies
+node_modules/
+.dart_tool/
+
+# Build outputs
+build/
+dist/
+*.app
+*.apk
+*.aab
+*.ipa
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
