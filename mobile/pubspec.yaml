@@ -38,11 +38,8 @@ dependencies:
   # Supabase
   supabase_flutter: ^2.8.3
 
-  # HTTP requests
-  http: ^1.2.2
-
-  # Local storage (to check first install)
-  shared_preferences: ^2.3.4
+  # Local notifications with sound
+  flutter_local_notifications: ^18.0.1
 
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.

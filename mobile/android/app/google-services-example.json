@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "162244365",
+    "project_id": "test-push-notification-abf",
+    "storage_bucket": "test-push-notification-a4f.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:16224224365:android:248d7b010fce4c0eb64",
+        "android_client_info": {
+          "package_name": "com.funnycat.funnycat"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCiaJAKkgM0MUYaP2dU-0q0hRbG4kA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

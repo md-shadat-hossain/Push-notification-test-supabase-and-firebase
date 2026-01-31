@@ -1,28 +1,62 @@
-import 'dart:convert';
 import 'dart:developer';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:http/http.dart' as http;
-import 'package:shared_preferences/shared_preferences.dart';
 
 // TODO: Replace with your Supabase credentials
-const supabaseUrl = 'YOUR_SUPABASE_URL';
-const supabaseAnonKey = 'YOUR_SUPABASE_ANON_KEY';
+const supabaseUrl = 'https://kvuzupuyzpmdljwukmfa.supabase.co';
+const supabaseAnonKey = 'sb_publishable_J2o5olE2lLSXvC4anTGcKQ_XjVrsWeP';
 
-// TODO: Replace with your server URL (use your computer's IP for real device testing)
-// For emulator use: http://10.0.2.2:3001
-// For real device use your computer's local IP: http://192.168.x.x:3001
-const notificationApiUrl = 'http://localhost:3001/api/send-notification';
+// Local notifications plugin
+final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
+    FlutterLocalNotificationsPlugin();
+
+// Android notification channel with sound
+const AndroidNotificationChannel channel = AndroidNotificationChannel(
+  'high_importance_channel',
+  'High Importance Notifications',
+  description: 'This channel is used for important notifications.',
+  importance: Importance.high,
+  playSound: true,
+);
 
 // Handle background messages
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp();
-  print('Background message: ${message.notification?.title}');
+  await _showNotification(message);
+}
+
+// Show local notification with sound
+Future<void> _showNotification(RemoteMessage message) async {
+  final notification = message.notification;
+  if (notification == null) return;
+
+  await flutterLocalNotificationsPlugin.show(
+    notification.hashCode,
+    notification.title,
+    notification.body,
+    NotificationDetails(
+      android: AndroidNotificationDetails(
+        channel.id,
+        channel.name,
+        channelDescription: channel.description,
+        importance: Importance.high,
+        priority: Priority.high,
+        playSound: true,
+        icon: '@mipmap/ic_launcher',
+      ),
+      iOS: const DarwinNotificationDetails(
+        presentAlert: true,
+        presentBadge: true,
+        presentSound: true,
+      ),
+    ),
+  );
 }
 
 void main() async {
@@ -30,6 +64,25 @@ void main() async {
 
   // Initialize Firebase
   await Firebase.initializeApp();
+
+  // Initialize Local Notifications
+  const androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
+  const iosSettings = DarwinInitializationSettings(
+    requestAlertPermission: true,
+    requestBadgePermission: true,
+    requestSoundPermission: true,
+  );
+  const initSettings = InitializationSettings(
+    android: androidSettings,
+    iOS: iosSettings,
+  );
+  await flutterLocalNotificationsPlugin.initialize(initSettings);
+
+  // Create Android notification channel
+  await flutterLocalNotificationsPlugin
+      .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin>()
+      ?.createNotificationChannel(channel);
 
   // Initialize Supabase
   await Supabase.initialize(
@@ -59,6 +112,34 @@ class MyApp extends StatelessWidget {
   }
 }
 
+// Notification model
+class NotificationItem {
+  final String id;
+  final String title;
+  final String body;
+  final String sentAt;
+  final String status;
+
+  NotificationItem({
+    required this.id,
+    required this.title,
+    required this.body,
+    required this.sentAt,
+    required this.status,
+  });
+
+  factory NotificationItem.fromJson(Map<String, dynamic> json) {
+    final notification = json['notifications'] as Map<String, dynamic>?;
+    return NotificationItem(
+      id: notification?['id'] ?? json['id'] ?? '',
+      title: notification?['title'] ?? json['title'] ?? '',
+      body: notification?['body'] ?? json['body'] ?? '',
+      sentAt: notification?['sent_at'] ?? json['sent_at'] ?? '',
+      status: json['status'] ?? 'sent',
+    );
+  }
+}
+
 class NotificationHomePage extends StatefulWidget {
   const NotificationHomePage({super.key});
 
@@ -69,7 +150,9 @@ class NotificationHomePage extends StatefulWidget {
 class _NotificationHomePageState extends State<NotificationHomePage> {
   String _fcmToken = '';
   String _statusMessage = 'Initializing...';
-  final List<String> _notifications = [];
+  bool _isSaving = false;
+  bool _isLoading = false;
+  List<NotificationItem> _notifications = [];
 
   @override
   void initState() {
@@ -93,53 +176,35 @@ class _NotificationHomePageState extends State<NotificationHomePage> {
         // Get FCM token
         final token = await messaging.getToken();
         if (token != null) {
-          setState(() => _fcmToken = token);
-          await _saveTokenToSupabase(token);
+          setState(() {
+            _fcmToken = token;
+            _statusMessage = 'Ready - Click button to register device';
+          });
+          // Load notifications for this token
+          await _loadNotificationsFromSupabase();
         }
 
         // Listen for token refresh
         messaging.onTokenRefresh.listen((newToken) async {
           setState(() => _fcmToken = newToken);
-          await _saveTokenToSupabase(newToken);
         });
 
-        // Handle foreground messages
-        FirebaseMessaging.onMessage.listen((RemoteMessage message) {
+        // Handle foreground messages - show notification with sound
+        FirebaseMessaging.onMessage.listen((RemoteMessage message) async {
           final notification = message.notification;
           if (notification != null) {
-            setState(() {
-              _notifications.insert(
-                0,
-                '${notification.title}: ${notification.body}',
-              );
-            });
+            // Show local notification with sound
+            await _showNotification(message);
 
-            // Show a snackbar
-            if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text('${notification.title}'),
-                  duration: const Duration(seconds: 3),
-                ),
-              );
-            }
+            // Reload notifications from Supabase
+            await _loadNotificationsFromSupabase();
           }
         });
 
         // Handle notification tap (when app was in background)
         FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
-          final notification = message.notification;
-          if (notification != null) {
-            setState(() {
-              _notifications.insert(
-                0,
-                '[Tapped] ${notification.title}: ${notification.body}',
-              );
-            });
-          }
+          _loadNotificationsFromSupabase();
         });
-
-        setState(() => _statusMessage = 'Ready to receive notifications');
       } else {
         setState(() => _statusMessage = 'Permission denied');
       }
@@ -148,7 +213,57 @@ class _NotificationHomePageState extends State<NotificationHomePage> {
     }
   }
 
+  Future<void> _loadNotificationsFromSupabase() async {
+    if (_fcmToken.isEmpty) return;
+
+    setState(() => _isLoading = true);
+
+    try {
+      final supabase = Supabase.instance.client;
+
+      final response = await supabase
+          .from('notification_recipients')
+          .select('''
+            id,
+            status,
+            created_at,
+            notifications (
+              id,
+              title,
+              body,
+              sent_at
+            )
+          ''')
+          .eq('fcm_token', _fcmToken)
+          .order('created_at', ascending: false);
+
+      final List<NotificationItem> notifications = [];
+      for (final item in response) {
+        if (item['notifications'] != null) {
+          notifications.add(NotificationItem.fromJson(item));
+        }
+      }
+
+      setState(() {
+        _notifications = notifications;
+        _statusMessage = 'Loaded ${notifications.length} notifications';
+      });
+    } catch (e) {
+      log('Error loading notifications: $e');
+      setState(() => _statusMessage = 'Error loading notifications: $e');
+    } finally {
+      setState(() => _isLoading = false);
+    }
+  }
+
   Future<void> _saveTokenToSupabase(String token) async {
+    if (_isSaving) return;
+
+    setState(() {
+      _isSaving = true;
+      _statusMessage = 'Saving token...';
+    });
+
     try {
       final supabase = Supabase.instance.client;
       final platform = Platform.isIOS ? 'ios' : 'android';
@@ -170,6 +285,7 @@ class _NotificationHomePageState extends State<NotificationHomePage> {
           'updated_at': DateTime.now().toIso8601String(),
         }).eq('token', token);
         log('Token updated in Supabase');
+        setState(() => _statusMessage = 'Device already registered (updated)');
       } else {
         // Insert new token
         await supabase.from('fcm_tokens').insert({
@@ -179,46 +295,23 @@ class _NotificationHomePageState extends State<NotificationHomePage> {
           'updated_at': DateTime.now().toIso8601String(),
         });
         log('Token inserted in Supabase');
-      }
-
-      setState(() => _statusMessage = 'Token saved to Supabase');
-
-      // Check if this is first install and send welcome notification
-      final prefs = await SharedPreferences.getInstance();
-      final isFirstInstall = prefs.getBool('first_install') ?? true;
-
-      if (isFirstInstall) {
-        await _sendWelcomeNotification(token);
-        await prefs.setBool('first_install', false);
+        setState(() => _statusMessage = 'Device registered successfully!');
       }
     } catch (e, stackTrace) {
       log('Failed to save token: $e');
       log('Stack trace: $stackTrace');
       setState(() => _statusMessage = 'Failed to save token: $e');
+    } finally {
+      setState(() => _isSaving = false);
     }
   }
 
-  Future<void> _sendWelcomeNotification(String token) async {
+  String _formatDate(String dateStr) {
     try {
-      final response = await http.post(
-        Uri.parse(notificationApiUrl),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'tokens': [token],
-          'title': 'Welcome!',
-          'body': 'Thanks for installing the app. You will now receive notifications.',
-        }),
-      );
-
-      if (response.statusCode == 200) {
-        log('Welcome notification sent successfully');
-        setState(() => _statusMessage = 'Welcome notification sent!');
-      } else {
-        log('Failed to send welcome notification: ${response.body}');
-      }
+      final date = DateTime.parse(dateStr);
+      return '${date.day}/${date.month}/${date.year} ${date.hour}:${date.minute.toString().padLeft(2, '0')}';
     } catch (e) {
-      log('Error sending welcome notification: $e');
-      // Don't update status - this is optional and shouldn't block the user
+      return dateStr;
     }
   }
 
@@ -255,50 +348,104 @@ class _NotificationHomePageState extends State<NotificationHomePage> {
             ),
             const SizedBox(height: 16),
 
-            // FCM Token card
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'FCM Token',
-                      style: Theme.of(context).textTheme.titleMedium,
+            // Buttons Row
+            Row(
+              children: [
+                // Register Device Button
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: _fcmToken.isEmpty || _isSaving
+                        ? null
+                        : () => _saveTokenToSupabase(_fcmToken),
+                    icon: _isSaving
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.add),
+                    label: Text(_isSaving ? 'Registering...' : 'Register'),
+                    style: ElevatedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      backgroundColor: Theme.of(context).colorScheme.primary,
+                      foregroundColor: Theme.of(context).colorScheme.onPrimary,
                     ),
-                    const SizedBox(height: 8),
-                    SelectableText(
-                      _fcmToken.isEmpty ? 'Loading...' : _fcmToken,
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
-                  ],
+                  ),
                 ),
-              ),
+                const SizedBox(width: 8),
+                // Refresh Button
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: _fcmToken.isEmpty || _isLoading
+                        ? null
+                        : _loadNotificationsFromSupabase,
+                    icon: _isLoading
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.refresh),
+                    label: Text(_isLoading ? 'Loading...' : 'Refresh'),
+                    style: ElevatedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                    ),
+                  ),
+                ),
+              ],
             ),
             const SizedBox(height: 16),
 
             // Notifications list
-            Text(
-              'Received Notifications',
-              style: Theme.of(context).textTheme.titleMedium,
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  'Notifications (${_notifications.length})',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+              ],
             ),
             const SizedBox(height: 8),
             Expanded(
-              child: _notifications.isEmpty
-                  ? const Center(
-                      child: Text('No notifications yet'),
-                    )
-                  : ListView.builder(
-                      itemCount: _notifications.length,
-                      itemBuilder: (context, index) {
-                        return Card(
-                          child: ListTile(
-                            leading: const Icon(Icons.notifications),
-                            title: Text(_notifications[index]),
-                          ),
-                        );
-                      },
-                    ),
+              child: _isLoading
+                  ? const Center(child: CircularProgressIndicator())
+                  : _notifications.isEmpty
+                      ? const Center(
+                          child: Text('No notifications yet'),
+                        )
+                      : ListView.builder(
+                          itemCount: _notifications.length,
+                          itemBuilder: (context, index) {
+                            final notif = _notifications[index];
+                            return Card(
+                              child: ListTile(
+                                leading: Icon(
+                                  Icons.notifications,
+                                  color: notif.status == 'sent'
+                                      ? Colors.green
+                                      : Colors.red,
+                                ),
+                                title: Text(notif.title),
+                                subtitle: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(notif.body),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      _formatDate(notif.sentAt),
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .bodySmall
+                                          ?.copyWith(color: Colors.grey),
+                                    ),
+                                  ],
+                                ),
+                                isThreeLine: true,
+                              ),
+                            );
+                          },
+                        ),
             ),
           ],
         ),

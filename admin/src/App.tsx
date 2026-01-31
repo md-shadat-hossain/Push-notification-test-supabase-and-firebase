@@ -79,16 +79,9 @@ function App() {
 
       setResult(data);
 
-      // Remove failed tokens from Supabase
+      // Log failed tokens but don't delete them
       if (data.failedTokens && data.failedTokens.length > 0) {
-        const failedTokenStrings = data.failedTokens.map(
-          (ft: { token: string }) => ft.token
-        );
-        await supabase
-          .from('fcm_tokens')
-          .delete()
-          .in('token', failedTokenStrings);
-        fetchTokens(); // Refresh token list
+        console.log('Failed tokens:', data.failedTokens);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An error occurred');
@@ -146,9 +139,14 @@ function App() {
         {error && <div style={styles.error}>{error}</div>}
 
         {result && (
-          <div style={styles.result}>
+          <div style={result.failureCount > 0 ? styles.error : styles.result}>
             <p>Sent: {result.successCount}</p>
             <p>Failed: {result.failureCount}</p>
+            {result.failedTokens && result.failedTokens.length > 0 && (
+              <p style={{ fontSize: 12, marginTop: 8 }}>
+                Error: {result.failedTokens[0]?.error}
+              </p>
+            )}
           </div>
         )}
       </div>
